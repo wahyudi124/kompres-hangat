@@ -31,6 +31,9 @@ unsigned long selectPressStart = 0;
 bool selectPressed = false;
 const unsigned long longPressTime = 2000; // 2 detik
 
+// Cancel message
+unsigned long cancelStart = 0;
+
 void setup() {
   lcd.init();
   lcd.backlight();
@@ -55,6 +58,7 @@ void loop() {
     case 4: handleTherapyTime(); break;
     case 5: handleCountdown(); break;
     case 6: handleTherapy(); break;
+    case 7: handleCancelMessage(); break;
   }
 }
 
@@ -73,10 +77,12 @@ void showPressAnyKey() {
 }
 
 void handlePressAnyKey() {
-  if (buttonPressed() && millis() - lastButtonPress > 300) {
-    state = 2;
-    showTempAdjust();
-    lastButtonPress = millis();
+  if (digitalRead(BTN_SELECT) == HIGH && digitalRead(BTN_UP) == HIGH && digitalRead(BTN_DOWN) == HIGH) {
+    if (buttonPressed() && millis() - lastButtonPress > 300) {
+      state = 2;
+      showTempAdjust();
+      lastButtonPress = millis();
+    }
   }
 }
 
@@ -202,8 +208,9 @@ void showCountdown() {
 void handleCountdown() {
   // Check for long press to cancel
   if (checkLongPress()) {
-    state = 1;
-    showPressAnyKey();
+    // Wait until all buttons released
+    while (digitalRead(BTN_SELECT) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW) {}
+    showCancelMessage();
     return;
   }
   
@@ -234,16 +241,13 @@ void showTherapy() {
 void handleTherapy() {
   // Check for long press to stop therapy
   if (checkLongPress()) {
-    lcd.clear();
-    lcd.print("TERAPI DIHENTIKAN");
-    lcd.setCursor(0, 1);
-    lcd.print("Tekan tombol");
-    while (!buttonPressed()) {} // Wait for button
-    state = 1;
+    // Wait until all buttons released
+    while (digitalRead(BTN_SELECT) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW) {}
+    
     tempOffset = 0;
     targetTemp = 40;
     therapyTime = 10;
-    showPressAnyKey();
+    showCancelMessage();
     return;
   }
   
@@ -321,4 +325,21 @@ bool checkLongPress() {
     selectPressed = false;
   }
   return false;
+}
+
+void showCancelMessage() {
+  lcd.clear();
+  lcd.print("Sistem berhasil");
+  lcd.setCursor(0, 1);
+  lcd.print("dibatalkan");
+  cancelStart = millis();
+  state = 7;
+}
+
+void handleCancelMessage() {
+  if (millis() - cancelStart >= 2000) {
+    state = 1;
+    lastButtonPress = millis() + 500; // Block button for 500ms
+    showPressAnyKey();
+  }
 }
