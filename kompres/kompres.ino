@@ -4,12 +4,14 @@
 #define BTN_UP 10
 #define BTN_DOWN 6
 #define BTN_SELECT 3
+#define LM35_PIN A2
 
 // LCD I2C
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 // Variables
 int currentTemp = 25; // Suhu saat ini
+unsigned long lastTempRead = 0;
 int tempOffset = 0;   // Offset suhu
 int targetTemp = 40;  // Suhu target (40, 50, 60)
 int therapyTime = 10; // Waktu terapi (10, 15, 20 menit)
@@ -50,6 +52,12 @@ void setup() {
 }
 
 void loop() {
+  // Update temperature every 500ms
+  if (millis() - lastTempRead >= 500) {
+    readTemperature();
+    lastTempRead = millis();
+  }
+  
   switch(state) {
     case 0: handleWelcome(); break;
     case 1: handlePressAnyKey(); break;
@@ -93,6 +101,13 @@ void showTempAdjust() {
 }
 
 void handleTempAdjust() {
+  // Update display every 500ms for realtime temperature
+  static unsigned long lastTempUpdate = 0;
+  if (millis() - lastTempUpdate >= 500) {
+    updateTempDisplay();
+    lastTempUpdate = millis();
+  }
+  
   if (millis() - lastButtonPress > 200) {
     if (digitalRead(BTN_UP) == LOW) {
       tempOffset++;
@@ -342,4 +357,10 @@ void handleCancelMessage() {
     lastButtonPress = millis() + 500; // Block button for 500ms
     showPressAnyKey();
   }
+}
+
+void readTemperature() {
+  int sensorValue = analogRead(LM35_PIN);
+  float voltage = sensorValue * (5.0 / 1023.0);
+  currentTemp = (int)(voltage * 100.0);
 }
