@@ -7,6 +7,7 @@
 #define LM35_PIN A2
 #define RELAY_PUMP 13
 #define RELAY_HEATER 12
+#define FLOW_SENSOR_PIN 7
 
 // LCD I2C
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -38,6 +39,16 @@ const unsigned long longPressTime = 2000; // 2 detik
 // Cancel message
 unsigned long cancelStart = 0;
 
+// Flow sensor variables
+volatile int flowPulseCount = 0;
+float flowRate = 0;
+float initialFlowRate = 0;
+unsigned long flowCheckStart = 0;
+bool flowStable = false;
+bool therapyStarted = false;
+const unsigned long flowStabilizeTime = 5000; // 5 detik
+const unsigned long flowTimeoutTime = 10000; // 10 detik timeout
+
 void setup() {
   lcd.init();
   lcd.backlight();
@@ -46,6 +57,10 @@ void setup() {
   pinMode(BTN_SELECT, INPUT_PULLUP);
   pinMode(RELAY_PUMP, OUTPUT);
   pinMode(RELAY_HEATER, OUTPUT);
+  pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
+  
+  // Attach interrupt for flow sensor
+  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseCounter, FALLING);
   
   // Turn off relays initially
   digitalWrite(RELAY_PUMP, LOW);
@@ -69,6 +84,14 @@ void loop() {
   // Control heater during therapy
   if (state == 6) {
     controlHeater();
+    checkFlowRate();
+  }
+  
+  // Calculate flow rate every second
+  static unsigned long lastFlowCalc = 0;
+  if (millis() - lastFlowCalc >= 1000) {
+    calculateFlowRate();
+    lastFlowCalc = millis();
   }
   
   switch(state) {
@@ -234,6 +257,12 @@ void showCountdown() {
   lcd.print("Bersiap...");
   // Turn on pump during countdown
   digitalWrite(RELAY_PUMP, HIGH);
+  // Reset flow monitoring
+  flowStable = false;
+  therapyStarted = false;
+  flowCheckStart = millis();
+  flowPulseCount = 0;
+  initialFlowRate = 0;
 }
 
 void handleCountdown() {
@@ -247,22 +276,46 @@ void handleCountdown() {
     return;
   }
   
-  unsigned long elapsed = millis() - countdownStart;
-  int remaining = 3 - (elapsed / 1000);
+  // Check flow sensor timeout (10 detik)
+  if (millis() - flowCheckStart > flowTimeoutTime && flowRate == 0) {
+    digitalWrite(RELAY_PUMP, LOW);
+    lcd.clear();
+    lcd.print("Tidak ada aliran");
+    lcd.setCursor(0, 1);
+    lcd.print("air terdeteksi");
+    delay(3000);
+    showCancelMessage();
+    return;
+  }
   
-  if (remaining > 0) {
-    if (millis() - lastUpdate >= 1000) {
-      lcd.setCursor(0, 1);
-      lcd.print("                ");
-      lcd.setCursor(0, 1);
-      lcd.print("Mulai dalam: ");
-      lcd.print(remaining);
-      lastUpdate = millis();
+  // Check if flow is stable for 5 seconds
+  if (flowRate > 0 && !flowStable) {
+    if (initialFlowRate == 0) {
+      initialFlowRate = flowRate;
+      flowCheckStart = millis();
     }
-  } else {
-    state = 6;
-    therapyStart = millis();
-    showTherapy();
+    if (millis() - flowCheckStart >= flowStabilizeTime) {
+      flowStable = true;
+      therapyStart = millis();
+      state = 6;
+      showTherapy();
+      return;
+    }
+  }
+  
+  // Display flow status
+  if (millis() - lastUpdate >= 1000) {
+    lcd.setCursor(0, 1);
+    lcd.print("                ");
+    lcd.setCursor(0, 1);
+    if (flowRate == 0) {
+      lcd.print("Menunggu aliran");
+    } else if (!flowStable) {
+      int remaining = (flowStabilizeTime - (millis() - flowCheckStart)) / 1000;
+      lcd.print("Stabilisasi: ");
+      lcd.print(remaining + 1);
+    }
+    lastUpdate = millis();
   }
 }
 
@@ -281,6 +334,22 @@ void handleTherapy() {
     digitalWrite(RELAY_PUMP, LOW);
     digitalWrite(RELAY_HEATER, LOW);
     
+    tempOffset = 0;
+    targetTemp = 40;
+    therapyTime = 10;
+    showCancelMessage();
+    return;
+  }
+  
+  // Check for flow rate drop (leak detection)
+  if (flowRate < initialFlowRate / 2) {
+    digitalWrite(RELAY_PUMP, LOW);
+    digitalWrite(RELAY_HEATER, LOW);
+    lcd.clear();
+    lcd.print("SISTEM BOCOR!");
+    lcd.setCursor(0, 1);
+    lcd.print("Aliran menurun");
+    delay(3000);
     tempOffset = 0;
     targetTemp = 40;
     therapyTime = 10;
@@ -408,5 +477,41 @@ void controlHeater() {
   }
   else if (actualTemp >= targetTemp + 2) {
     digitalWrite(RELAY_HEATER, LOW);
+  }
+}
+
+void flowPulseCounter() {
+  flowPulseCount++;
+}
+
+void calculateFlowRate() {
+  // Calculate flow rate (L/min)
+  // YF-S401 calibration factor: 5.5 pulses per liter
+  flowRate = (flowPulseCount / 5.5);
+  flowPulseCount = 0;
+}
+
+void checkFlowRate() {
+  // Monitor flow rate during therapy
+  if (initialFlowRate > 0) {
+    // Check if flow dropped below 50% of initial rate
+    if (flowRate < (initialFlowRate * 0.5)) {
+      // Flow rate too low - possible leak
+      digitalWrite(RELAY_PUMP, LOW);
+      digitalWrite(RELAY_HEATER, LOW);
+      lcd.clear();
+      lcd.print("SISTEM BOCOR!");
+      lcd.setCursor(0, 1);
+      lcd.print("Flow: ");
+      lcd.print(flowRate, 1);
+      lcd.print(" L/min");
+      delay(3000);
+      
+      // Reset and go to cancel message
+      tempOffset = 0;
+      targetTemp = 40;
+      therapyTime = 10;
+      showCancelMessage();
+    }
   }
 }
