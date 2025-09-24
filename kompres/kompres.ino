@@ -5,6 +5,8 @@
 #define BTN_DOWN 6
 #define BTN_SELECT 3
 #define LM35_PIN A2
+#define RELAY_PUMP 13
+#define RELAY_HEATER 12
 
 // LCD I2C
 LiquidCrystal_I2C lcd(0x27, 16, 2);
@@ -42,6 +44,12 @@ void setup() {
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_SELECT, INPUT_PULLUP);
+  pinMode(RELAY_PUMP, OUTPUT);
+  pinMode(RELAY_HEATER, OUTPUT);
+  
+  // Turn off relays initially
+  digitalWrite(RELAY_PUMP, LOW);
+  digitalWrite(RELAY_HEATER, LOW);
   
   // Welcome screen
   lcd.print("SISTEM TERAPI");
@@ -56,6 +64,11 @@ void loop() {
   if (millis() - lastTempRead >= 500) {
     readTemperature();
     lastTempRead = millis();
+  }
+  
+  // Control heater during therapy
+  if (state == 6) {
+    controlHeater();
   }
   
   switch(state) {
@@ -128,14 +141,15 @@ void handleTempAdjust() {
 }
 
 void updateTempDisplay() {
+  // Debug: show raw ADC value
+  int rawADC = analogRead(LM35_PIN);
+  
   lcd.setCursor(0, 1);
   lcd.print("                ");
   lcd.setCursor(0, 1);
   lcd.print(currentTemp + tempOffset);
-  lcd.print("C (");
-  lcd.print(tempOffset >= 0 ? "+" : "");
-  lcd.print(tempOffset);
-  lcd.print(")");
+  lcd.print("C ADC:");
+  lcd.print(rawADC);
 }
 
 void showTargetTemp() {
@@ -218,6 +232,8 @@ void updateTimeDisplay() {
 void showCountdown() {
   lcd.clear();
   lcd.print("Bersiap...");
+  // Turn on pump during countdown
+  digitalWrite(RELAY_PUMP, HIGH);
 }
 
 void handleCountdown() {
@@ -225,6 +241,8 @@ void handleCountdown() {
   if (checkLongPress()) {
     // Wait until all buttons released
     while (digitalRead(BTN_SELECT) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW) {}
+    // Turn off pump when cancelled
+    digitalWrite(RELAY_PUMP, LOW);
     showCancelMessage();
     return;
   }
@@ -258,6 +276,10 @@ void handleTherapy() {
   if (checkLongPress()) {
     // Wait until all buttons released
     while (digitalRead(BTN_SELECT) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW) {}
+    
+    // Turn off all relays
+    digitalWrite(RELAY_PUMP, LOW);
+    digitalWrite(RELAY_HEATER, LOW);
     
     tempOffset = 0;
     targetTemp = 40;
@@ -295,6 +317,10 @@ void handleTherapy() {
       screenNeedsUpdate = false;
     }
     if (buttonPressed() && millis() - lastButtonPress > 300) {
+      // Turn off all relays when therapy finished
+      digitalWrite(RELAY_PUMP, LOW);
+      digitalWrite(RELAY_HEATER, LOW);
+      
       state = 1;
       tempOffset = 0;
       targetTemp = 40;
@@ -354,13 +380,33 @@ void showCancelMessage() {
 void handleCancelMessage() {
   if (millis() - cancelStart >= 2000) {
     state = 1;
-    lastButtonPress = millis() + 500; // Block button for 500ms
+    lastButtonPress = millis() + 500;
     showPressAnyKey();
   }
 }
 
 void readTemperature() {
+  // Single read - no delay for non-blocking
   int sensorValue = analogRead(LM35_PIN);
-  float voltage = sensorValue * (5.0 / 1023.0);
-  currentTemp = (int)(voltage * 100.0);
+  
+  // 1°C = 10mV (sesuai datasheet)
+  // 5V / 1023 = 4.883 mV (5V = tegangan referensi, 1023 = resolusi 10 bit)
+  float tempp =  sensorValue / 2.0479;
+  
+  // Jika sensor memberikan Fahrenheit, konversi ke Celsius
+  // currentTemp = (int)((tempCelsius - 32.0) * 5.0 / 9.0);
+  
+  // LM35 sudah dalam Celsius
+  currentTemp = (int)tempp;
+}
+
+void controlHeater() {
+  int actualTemp = currentTemp + tempOffset;
+  
+  if (actualTemp < targetTemp) {
+    digitalWrite(RELAY_HEATER, HIGH);
+  }
+  else if (actualTemp >= targetTemp + 2) {
+    digitalWrite(RELAY_HEATER, LOW);
+  }
 }
