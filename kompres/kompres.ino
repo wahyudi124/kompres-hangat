@@ -15,6 +15,13 @@ LiquidCrystal_I2C lcd(0x27, 16, 2);
 // Variables
 int currentTemp = 25; // Suhu saat ini
 unsigned long lastTempRead = 0;
+
+// Temperature averaging filter
+const int TEMP_SAMPLES = 10;
+int tempReadings[TEMP_SAMPLES];
+int tempIndex = 0;
+long tempTotal = 0;
+bool tempArrayFilled = false;
 int tempOffset = 0;   // Offset suhu
 int targetTemp = 40;  // Suhu target (40, 50, 60)
 int therapyTime = 10; // Waktu terapi (10, 15, 20 menit)
@@ -62,6 +69,12 @@ void setup() {
   pinMode(BTN_SELECT, INPUT_PULLUP);
 
   pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
+  
+  // Initialize temperature filter array
+  for (int i = 0; i < TEMP_SAMPLES; i++) {
+    tempReadings[i] = 25; // Initialize with room temperature
+  }
+  tempTotal = 25 * TEMP_SAMPLES;
   
   // Attach interrupt for flow sensor
   attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseCounter, FALLING);
@@ -256,7 +269,7 @@ void showCountdown() {
   lcd.clear();
   lcd.print("Bersiap...");
   // Turn on pump during countdown
-  digitalWrite(RELAY_PUMP, HIGH);
+  digitalWrite(RELAY_PUMP, LOW);
   // Reset flow monitoring
   flowStable = false;
   therapyStarted = false;
@@ -271,14 +284,14 @@ void handleCountdown() {
     // Wait until all buttons released
     while (digitalRead(BTN_SELECT) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW) {}
     // Turn off pump when cancelled
-    digitalWrite(RELAY_PUMP, LOW);
+    digitalWrite(RELAY_PUMP, HIGH);
     showCancelMessage();
     return;
   }
   
   // Check flow sensor timeout (10 detik)
   if (millis() - flowCheckStart > flowTimeoutTime && flowRate == 0) {
-    digitalWrite(RELAY_PUMP, LOW);
+    digitalWrite(RELAY_PUMP, HIGH);
     lcd.clear();
     lcd.print("Tidak ada aliran");
     lcd.setCursor(0, 1);
@@ -459,26 +472,41 @@ void readTemperature() {
   int sensorValue = analogRead(LM35_PIN);
   
   // 1°C = 10mV (sesuai datasheet)
-  
   // 5V / 1023 = 4.883 mV (5V = tegangan referensi, 1023 = resolusi 10 bit)
   float temp_val = (sensorValue * 4.88);      /* Convert adc value to equivalent voltage */
   temp_val = (temp_val/10);
   
-  // Jika sensor memberikan Fahrenheit, konversi ke Celsius
-  // currentTemp = (int)((tempCelsius - 32.0) * 5.0 / 9.0);
+  int rawTemp = (int)temp_val;
   
-  // LM35 sudah dalam Celsius
-  currentTemp = (int)temp_val;
+  // Apply moving average filter
+  tempTotal = tempTotal - tempReadings[tempIndex];
+  tempReadings[tempIndex] = rawTemp;
+  tempTotal = tempTotal + tempReadings[tempIndex];
+  tempIndex = (tempIndex + 1) % TEMP_SAMPLES;
+  
+  // Check if array is filled for the first time
+  if (tempIndex == 0 && !tempArrayFilled) {
+    tempArrayFilled = true;
+  }
+  
+  // Calculate average only if we have enough samples
+  if (tempArrayFilled) {
+    currentTemp = tempTotal / TEMP_SAMPLES;
+  } else {
+    // Use simple average for initial readings
+    int validSamples = (tempIndex == 0) ? TEMP_SAMPLES : tempIndex;
+    currentTemp = tempTotal / validSamples;
+  }
 }
 
 void controlHeater() {
   int actualTemp = currentTemp + tempOffset;
   
   if (actualTemp < targetTemp) {
-    digitalWrite(RELAY_HEATER, LOW);
+    digitalWrite(RELAY_HEATER, LOW); // Turn on heater
   }
   else if (actualTemp >= targetTemp + 2) {
-    digitalWrite(RELAY_HEATER, HIGH);
+    digitalWrite(RELAY_HEATER, HIGH); // Turn off heater
   }
 }
 
