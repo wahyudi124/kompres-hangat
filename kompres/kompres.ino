@@ -1,4 +1,6 @@
+#include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <PinChangeInterrupt.h>  // Install dari Library Manager
 
 // Pin definitions
 #define BTN_UP 3
@@ -46,8 +48,8 @@ const unsigned long longPressTime = 2000; // 2 detik
 // Cancel message
 unsigned long cancelStart = 0;
 
-// Flow sensor variables
-volatile int flowPulseCount = 0;
+// Flow sensor variables (YF-S401)
+volatile unsigned long pulseCount = 0;
 float flowRate = 0;
 float initialFlowRate = 0;
 unsigned long flowCheckStart = 0;
@@ -55,6 +57,10 @@ bool flowStable = false;
 bool therapyStarted = false;
 const unsigned long flowStabilizeTime = 5000; // 5 detik
 const unsigned long flowTimeoutTime = 10000; // 10 detik timeout
+const float PULSES_PER_LITER = 450.0; // YF-S401 kalibrasi
+const unsigned long WINDOW_MS = 1000; // 1 detik window
+unsigned long lastCalcMs = 0;
+unsigned long lastCount = 0;
 
 void setup() {
 
@@ -76,8 +82,9 @@ void setup() {
   }
   tempTotal = 25 * TEMP_SAMPLES;
   
-  // Attach interrupt for flow sensor
-  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseCounter, FALLING);
+  // Attach Pin Change Interrupt for flow sensor (YF-S401) - pin 7
+  attachPCINT(digitalPinToPCINT(FLOW_SENSOR_PIN), flowISR, FALLING);
+  lastCalcMs = millis();
   
   // Welcome screen
   lcd.print("SISTEM TERAPI");
@@ -101,10 +108,9 @@ void loop() {
   }
   
   // Calculate flow rate every second
-  static unsigned long lastFlowCalc = 0;
-  if (millis() - lastFlowCalc >= 1000) {
-    calculateFlowRate();
-    lastFlowCalc = millis();
+  unsigned long now = millis();
+  if (now - lastCalcMs >= WINDOW_MS) {
+    calculateFlowRate(now);
   }
   
   switch(state) {
@@ -274,8 +280,10 @@ void showCountdown() {
   flowStable = false;
   therapyStarted = false;
   flowCheckStart = millis();
-  flowPulseCount = 0;
+  pulseCount = 0;
+  lastCount = 0;
   initialFlowRate = 0;
+  lastCalcMs = millis();
 }
 
 void handleCountdown() {
@@ -289,13 +297,13 @@ void handleCountdown() {
     return;
   }
   
-  // Check flow sensor timeout (10 detik)
+  // Check flow sensor timeout (10 detik) - hanya jika benar-benar tidak ada aliran
   if (millis() - flowCheckStart > flowTimeoutTime && flowRate == 0) {
     digitalWrite(RELAY_PUMP, HIGH);
     lcd.clear();
-    lcd.print("Tidak ada aliran");
+    lcd.print("Pompa bermasalah");
     lcd.setCursor(0, 1);
-    lcd.print("air terdeteksi");
+    lcd.print("Tidak ada aliran");
     delay(3000);
     showCancelMessage();
     return;
@@ -316,16 +324,18 @@ void handleCountdown() {
     }
   }
   
-  // Display flow status
+  // Display flow status with flow rate
   if (millis() - lastUpdate >= 1000) {
     lcd.setCursor(0, 1);
     lcd.print("                ");
     lcd.setCursor(0, 1);
     if (flowRate == 0) {
-      lcd.print("Menunggu aliran");
+      lcd.print("Flow: 0.0 L/min");
     } else if (!flowStable) {
       int remaining = (flowStabilizeTime - (millis() - flowCheckStart)) / 1000;
-      lcd.print("Stabilisasi: ");
+      lcd.print("Flow:");
+      lcd.print(flowRate, 1);
+      lcd.print(" S:");
       lcd.print(remaining + 1);
     }
     lastUpdate = millis();
@@ -335,6 +345,18 @@ void handleCountdown() {
 void showTherapy() {
   lcd.clear();
   lcd.print("TERAPI AKTIF");
+  updateTherapyDisplay();
+}
+
+void updateTherapyDisplay() {
+  lcd.setCursor(0, 1);
+  lcd.print("                ");
+  lcd.setCursor(0, 1);
+  // Show temperature and flow
+  lcd.print("T:");
+  lcd.print(currentTemp + tempOffset);
+  lcd.print("C F:");
+  lcd.print(flowRate, 1);
 }
 
 void handleTherapy() {
@@ -379,15 +401,34 @@ void handleTherapy() {
       int minutes = remaining / 60000;
       int seconds = (remaining % 60000) / 1000;
       
+      // Alternate display every 3 seconds
+      static bool showTimer = true;
+      static unsigned long displayToggle = 0;
+      
+      if (millis() - displayToggle >= 3000) {
+        showTimer = !showTimer;
+        displayToggle = millis();
+      }
+      
       lcd.setCursor(0, 1);
       lcd.print("                ");
       lcd.setCursor(0, 1);
-      lcd.print("Sisa: ");
-      if (minutes < 10) lcd.print("0");
-      lcd.print(minutes);
-      lcd.print(":");
-      if (seconds < 10) lcd.print("0");
-      lcd.print(seconds);
+      
+      if (showTimer) {
+        // Show remaining time
+        lcd.print("Sisa: ");
+        if (minutes < 10) lcd.print("0");
+        lcd.print(minutes);
+        lcd.print(":");
+        if (seconds < 10) lcd.print("0");
+        lcd.print(seconds);
+      } else {
+        // Show temperature and flow
+        lcd.print("T:");
+        lcd.print(currentTemp + tempOffset);
+        lcd.print("C F:");
+        lcd.print(flowRate, 1);
+      }
       lastUpdate = millis();
     }
   } else {
@@ -510,15 +551,27 @@ void controlHeater() {
   }
 }
 
-void flowPulseCounter() {
-  flowPulseCount++;
+void flowISR() {
+  pulseCount++;
 }
 
-void calculateFlowRate() {
-  // Calculate flow rate (L/min)
-  // YF-S401 calibration factor: 5.5 pulses per liter
-  flowRate = (flowPulseCount / 5.5);
-  flowPulseCount = 0;
+void calculateFlowRate(unsigned long now) {
+  // Ambil delta pulsa dalam jendela waktu
+  unsigned long countNow = pulseCount;
+  unsigned long delta = countNow - lastCount;
+  lastCount = countNow;
+  
+  // Hitung volume pada jendela (dalam liter)
+  float windowSeconds = (now - lastCalcMs) / 1000.0;
+  float litersWindow = delta / PULSES_PER_LITER;
+  
+  // L/min
+  if (windowSeconds > 0) {
+    flowRate = litersWindow * (60.0 / windowSeconds);
+  }
+  
+  // Geser jendela
+  lastCalcMs = now;
 }
 
 void checkFlowRate() {
@@ -526,16 +579,17 @@ void checkFlowRate() {
   if (initialFlowRate > 0) {
     // Check if flow dropped below 50% of initial rate
     if (flowRate < (initialFlowRate * 0.5)) {
-      // Flow rate too low - possible leak
+      // Flow rate too low - ada masalah (bocor, sumbatan, dll)
       digitalWrite(RELAY_PUMP, HIGH);
       digitalWrite(RELAY_HEATER, HIGH);
       lcd.clear();
-      lcd.print("SISTEM BOCOR!");
+      lcd.print("ALIRAN BERMASALAH");
       lcd.setCursor(0, 1);
-      lcd.print("Flow: ");
+      lcd.print("Awal:");
+      lcd.print(initialFlowRate, 1);
+      lcd.print(" Kini:");
       lcd.print(flowRate, 1);
-      lcd.print(" L/min");
-      delay(3000);
+      delay(4000);
       
       // Reset and go to cancel message
       tempOffset = 0;
