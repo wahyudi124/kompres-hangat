@@ -1,9 +1,9 @@
 #include <LiquidCrystal_I2C.h>
 
 // Pin definitions
-#define BTN_UP 10
+#define BTN_UP 3
 #define BTN_DOWN 6
-#define BTN_SELECT 3
+#define BTN_SELECT 10
 #define LM35_PIN A2
 #define RELAY_PUMP 13
 #define RELAY_HEATER 12
@@ -50,21 +50,21 @@ const unsigned long flowStabilizeTime = 5000; // 5 detik
 const unsigned long flowTimeoutTime = 10000; // 10 detik timeout
 
 void setup() {
+
+  pinMode(RELAY_PUMP, OUTPUT);
+  pinMode(RELAY_HEATER, OUTPUT);
+  digitalWrite(RELAY_PUMP, HIGH);
+  digitalWrite(RELAY_HEATER, HIGH);
   lcd.init();
   lcd.backlight();
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_SELECT, INPUT_PULLUP);
-  pinMode(RELAY_PUMP, OUTPUT);
-  pinMode(RELAY_HEATER, OUTPUT);
+
   pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
   
   // Attach interrupt for flow sensor
   attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowPulseCounter, FALLING);
-  
-  // Turn off relays initially
-  digitalWrite(RELAY_PUMP, LOW);
-  digitalWrite(RELAY_HEATER, LOW);
   
   // Welcome screen
   lcd.print("SISTEM TERAPI");
@@ -331,8 +331,8 @@ void handleTherapy() {
     while (digitalRead(BTN_SELECT) == LOW || digitalRead(BTN_UP) == LOW || digitalRead(BTN_DOWN) == LOW) {}
     
     // Turn off all relays
-    digitalWrite(RELAY_PUMP, LOW);
-    digitalWrite(RELAY_HEATER, LOW);
+    digitalWrite(RELAY_PUMP, HIGH);
+    digitalWrite(RELAY_HEATER, HIGH);
     
     tempOffset = 0;
     targetTemp = 40;
@@ -343,8 +343,8 @@ void handleTherapy() {
   
   // Check for flow rate drop (leak detection)
   if (flowRate < initialFlowRate / 2) {
-    digitalWrite(RELAY_PUMP, LOW);
-    digitalWrite(RELAY_HEATER, LOW);
+    digitalWrite(RELAY_PUMP, HIGH);
+    digitalWrite(RELAY_HEATER, HIGH);
     lcd.clear();
     lcd.print("SISTEM BOCOR!");
     lcd.setCursor(0, 1);
@@ -387,8 +387,8 @@ void handleTherapy() {
     }
     if (buttonPressed() && millis() - lastButtonPress > 300) {
       // Turn off all relays when therapy finished
-      digitalWrite(RELAY_PUMP, LOW);
-      digitalWrite(RELAY_HEATER, LOW);
+      digitalWrite(RELAY_PUMP, HIGH);
+      digitalWrite(RELAY_HEATER, HIGH);
       
       state = 1;
       tempOffset = 0;
@@ -459,24 +459,26 @@ void readTemperature() {
   int sensorValue = analogRead(LM35_PIN);
   
   // 1°C = 10mV (sesuai datasheet)
+  
   // 5V / 1023 = 4.883 mV (5V = tegangan referensi, 1023 = resolusi 10 bit)
-  float tempp =  sensorValue / 2.0479;
+  float temp_val = (sensorValue * 4.88);      /* Convert adc value to equivalent voltage */
+  temp_val = (temp_val/10);
   
   // Jika sensor memberikan Fahrenheit, konversi ke Celsius
   // currentTemp = (int)((tempCelsius - 32.0) * 5.0 / 9.0);
   
   // LM35 sudah dalam Celsius
-  currentTemp = (int)tempp;
+  currentTemp = (int)temp_val;
 }
 
 void controlHeater() {
   int actualTemp = currentTemp + tempOffset;
   
   if (actualTemp < targetTemp) {
-    digitalWrite(RELAY_HEATER, HIGH);
+    digitalWrite(RELAY_HEATER, LOW);
   }
   else if (actualTemp >= targetTemp + 2) {
-    digitalWrite(RELAY_HEATER, LOW);
+    digitalWrite(RELAY_HEATER, HIGH);
   }
 }
 
@@ -497,8 +499,8 @@ void checkFlowRate() {
     // Check if flow dropped below 50% of initial rate
     if (flowRate < (initialFlowRate * 0.5)) {
       // Flow rate too low - possible leak
-      digitalWrite(RELAY_PUMP, LOW);
-      digitalWrite(RELAY_HEATER, LOW);
+      digitalWrite(RELAY_PUMP, HIGH);
+      digitalWrite(RELAY_HEATER, HIGH);
       lcd.clear();
       lcd.print("SISTEM BOCOR!");
       lcd.setCursor(0, 1);
