@@ -582,8 +582,11 @@ void calculateFlowRate(unsigned long now) {
 void checkFlowRate() {
   // Monitor flow rate during therapy
   if (initialFlowRate > 0) {
-    // Check if flow dropped below 50% of initial rate
-    if (flowRate < (initialFlowRate * 0.5)) {
+    // Only check flow rate if therapy is still running (not finished)
+    unsigned long elapsed = millis() - therapyStart;
+    unsigned long totalTime = therapyTime * 60000UL;
+    
+    if (elapsed < totalTime && flowRate < (initialFlowRate * 0.5)) {
       // Flow rate too low - ada masalah (bocor, sumbatan, dll)
       digitalWrite(RELAY_PUMP, HIGH);
       digitalWrite(RELAY_HEATER, HIGH);
