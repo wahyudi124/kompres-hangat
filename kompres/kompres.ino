@@ -11,6 +11,8 @@
 #define RELAY_HEATER 12
 #define FLOW_SENSOR_PIN 7
 
+bool endterapi = false;
+
 // LCD I2C
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
@@ -359,6 +361,8 @@ void updateTherapyDisplay() {
   lcd.print(flowRate, 1);
 }
 
+
+
 void handleTherapy() {
   // Check for long press to stop therapy
   if (checkLongPress()) {
@@ -377,7 +381,7 @@ void handleTherapy() {
   }
   
   // Check for flow rate drop (leak detection)
-  if (flowRate < initialFlowRate / 2) {
+  if (flowRate < initialFlowRate / 2 && endterapi == false) {
     digitalWrite(RELAY_PUMP, HIGH);
     digitalWrite(RELAY_HEATER, HIGH);
     lcd.clear();
@@ -396,7 +400,7 @@ void handleTherapy() {
   unsigned long totalTime = therapyTime * 60000UL;
   unsigned long remaining = totalTime - elapsed;
   
-  if (remaining > 0) {
+  if (remaining > 0 && endterapi== false) {
     if (millis() - lastUpdate >= 1000) {
       int minutes = remaining / 60000;
       int seconds = (remaining % 60000) / 1000;
@@ -440,6 +444,7 @@ void handleTherapy() {
     static unsigned long therapyEndTime = 0;
     if (screenNeedsUpdate) {
       lcd.clear();
+      endterapi = true;
       lcd.print("TERAPI SELESAI");
       lcd.setCursor(0, 1);
       lcd.print("Kembali ke menu");
@@ -453,6 +458,7 @@ void handleTherapy() {
       tempOffset = 0;
       targetTemp = 40;
       therapyTime = 10;
+      endterapi = false;
       screenNeedsUpdate = true;
       showPressAnyKey();
       lastButtonPress = millis();
