@@ -432,18 +432,23 @@ void handleTherapy() {
       lastUpdate = millis();
     }
   } else {
+    // Turn off all relays immediately when therapy time is up
+    digitalWrite(RELAY_PUMP, HIGH);
+    digitalWrite(RELAY_HEATER, HIGH);
+    
+    // Auto return to idle after 3 seconds
+    static unsigned long therapyEndTime = 0;
     if (screenNeedsUpdate) {
       lcd.clear();
       lcd.print("TERAPI SELESAI");
       lcd.setCursor(0, 1);
-      lcd.print("Tekan tombol");
+      lcd.print("Kembali ke menu");
       screenNeedsUpdate = false;
+      therapyEndTime = millis();
     }
-    if (buttonPressed() && millis() - lastButtonPress > 300) {
-      // Turn off all relays when therapy finished
-      digitalWrite(RELAY_PUMP, HIGH);
-      digitalWrite(RELAY_HEATER, HIGH);
-      
+    
+    // Auto return to start after 3 seconds or button press
+    if (millis() - therapyEndTime >= 3000 || (buttonPressed() && millis() - lastButtonPress > 300)) {
       state = 1;
       tempOffset = 0;
       targetTemp = 40;
